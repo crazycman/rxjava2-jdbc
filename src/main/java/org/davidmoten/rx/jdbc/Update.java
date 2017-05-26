@@ -49,6 +49,8 @@ public enum Update {
                     }
                     return result //
                             .doOnComplete(() -> Util.commit(ps.ps)) //
+                            // execute the last batch, result is not in returned Flowable!
+                            .doOnComplete(() -> ps.ps.executeBatch())
                             .doOnError(e -> Util.rollback(ps.ps));
                 });
             };

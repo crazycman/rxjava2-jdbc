@@ -619,6 +619,45 @@ public class DatabaseTest {
     }
 
     @Test
+    public final void testUpdateBatchSizeMatches() {
+        Database db = db();
+        db.update("insert into person(name, score) values(?, ?)")
+                .parameters("MAJOR", 17)
+                .parameters("GHOST", 11)
+                .batchSize(2)
+                .counts()
+                .test()
+                .assertValues(1, 1)
+                .assertComplete()
+                .assertNoErrors();
+
+        db.select("select name from person")
+                .getAs(String.class)
+                .test()
+                .assertValueCount(5);
+    }
+
+    @Test
+    public final void testUpdateBatchSizeMismatch() {
+        Database db = db();
+        db.update("insert into person(name, score) values(?, ?)")
+                .parameters("HEINZ", 17)
+                .parameters("FRANZ", 11)
+                .batchSize(3)
+                .counts()
+                .test()
+                // unfortunately the following does not hold
+//                .assertValues(1, 1)
+                .assertComplete()
+                .assertNoErrors();
+
+        db.select("select name from person")
+                .getAs(String.class)
+                .test()
+                .assertValueCount(5);
+    }
+
+    @Test
     public void testReturnGeneratedKeys() {
         Database db = db();
         // note is a table with auto increment
