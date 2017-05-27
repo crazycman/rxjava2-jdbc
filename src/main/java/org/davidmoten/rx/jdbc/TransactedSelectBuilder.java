@@ -1,6 +1,7 @@
 package org.davidmoten.rx.jdbc;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -10,7 +11,7 @@ import org.slf4j.LoggerFactory;
 import io.reactivex.Flowable;
 import io.reactivex.Notification;
 
-public class TransactedSelectBuilder {
+public final class TransactedSelectBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(TransactedSelectBuilder.class);
 
@@ -18,8 +19,11 @@ public class TransactedSelectBuilder {
 
     private boolean valuesOnly = false;
 
-    public TransactedSelectBuilder(SelectBuilder selectBuilder) {
+    private final Database db;
+
+    public TransactedSelectBuilder(SelectBuilder selectBuilder, Database db) {
         this.selectBuilder = selectBuilder;
+        this.db = db;
     }
 
     public TransactedSelectBuilder parameters(Flowable<List<Object>> parameters) {
@@ -58,67 +62,48 @@ public class TransactedSelectBuilder {
     }
 
     public TransactedSelectBuilderValuesOnly valuesOnly() {
-        return new TransactedSelectBuilderValuesOnly(this);
+        return new TransactedSelectBuilderValuesOnly(this, db);
     }
 
     public static final class TransactedSelectBuilderValuesOnly {
         private final TransactedSelectBuilder b;
+        private final Database db;
 
-        TransactedSelectBuilderValuesOnly(TransactedSelectBuilder b) {
+        TransactedSelectBuilderValuesOnly(TransactedSelectBuilder b, Database db) {
             this.b = b;
+            this.db = db;
         }
 
         public <T> Flowable<T> getAs(Class<T> cls) {
             AtomicReference<Connection> connection = new AtomicReference<Connection>();
-            Flowable<Tx<T>> o = Select.create(b.selectBuilder.connections.firstOrError() //
-                    .map(c -> {
-                        if (c instanceof TransactedConnection) {
-                            connection.set(c);
-                            return c;
-                        } else {
-                            c.setAutoCommit(false);
-                            log.debug("creating new TransactedConnection");
-                            TransactedConnection c2 = new TransactedConnection(c);
-                            connection.set(c2);
-                            return c2;
-                        }
-                    }), //
-                    b.selectBuilder.parameterGroupsToFlowable(), //
-                    b.selectBuilder.sql, //
-                    b.selectBuilder.fetchSize, //
-                    rs -> Util.mapObject(rs, cls, 1)) //
+            Flowable<Tx<T>> o = Select
+                    .create(b.selectBuilder.connections.firstOrError() //
+                            .map(c -> Util.toTransactedConnection(connection, c)), //
+                            b.selectBuilder.parameterGroupsToFlowable(), //
+                            b.selectBuilder.sql, //
+                            b.selectBuilder.fetchSize, //
+                            rs -> Util.mapObject(rs, cls, 1)) //
                     .materialize() //
-                    .flatMap(n -> toTx(n, connection.get())).doOnNext(tx -> {
+                    .flatMap(n -> toTx(n, connection.get(), db)).doOnNext(tx -> {
                         if (tx.isComplete()) {
                             ((TxImpl<T>) tx).connection().commit();
                         }
                     });
             return o.flatMap(Tx.flattenToValuesOnly());
         }
-
     }
 
     public <T> Flowable<Tx<T>> getAs(Class<T> cls) {
         AtomicReference<Connection> connection = new AtomicReference<Connection>();
-        Flowable<Tx<T>> o = Select.create(selectBuilder.connections.firstOrError() //
-                .map(c -> {
-                    if (c instanceof TransactedConnection) {
-                        connection.set(c);
-                        return c;
-                    } else {
-                        c.setAutoCommit(false);
-                        log.debug("creating new TransactedConnection");
-                        TransactedConnection c2 = new TransactedConnection(c);
-                        connection.set(c2);
-                        return c2;
-                    }
-                }), //
-                selectBuilder.parameterGroupsToFlowable(), //
-                selectBuilder.sql, //
-                selectBuilder.fetchSize, //
-                rs -> Util.mapObject(rs, cls, 1)) //
+        Flowable<Tx<T>> o = Select
+                .create(selectBuilder.connections.firstOrError() //
+                        .map(c -> Util.toTransactedConnection(connection, c)), //
+                        selectBuilder.parameterGroupsToFlowable(), //
+                        selectBuilder.sql, //
+                        selectBuilder.fetchSize, //
+                        rs -> Util.mapObject(rs, cls, 1)) //
                 .materialize() //
-                .flatMap(n -> toTx(n, connection.get())).doOnNext(tx -> {
+                .flatMap(n -> toTx(n, connection.get(), db)).doOnNext(tx -> {
                     if (tx.isComplete()) {
                         ((TxImpl<T>) tx).connection().commit();
                     }
@@ -130,11 +115,11 @@ public class TransactedSelectBuilder {
         }
     }
 
-    private static <T> Flowable<Tx<T>> toTx(Notification<T> n, Connection con) {
+    private static <T> Flowable<Tx<T>> toTx(Notification<T> n, Connection con, Database db) {
         if (n.isOnComplete())
-            return Flowable.just(new TxImpl<T>(con, null, null, true));
+            return Flowable.just(new TxImpl<T>(con, null, null, true, db));
         else if (n.isOnNext())
-            return Flowable.just(new TxImpl<T>(con, n.getValue(), null, false));
+            return Flowable.just(new TxImpl<T>(con, n.getValue(), null, false, db));
         else
             return Flowable.error(n.getError());
     }

@@ -127,17 +127,17 @@ public class Database implements AutoCloseable {
     }
 
     public SelectBuilder select(String sql) {
-        return new SelectBuilder(sql, connections());
+        return new SelectBuilder(sql, connections(), this);
     }
     
     public UpdateBuilder update(String sql) {
-        return new UpdateBuilder(sql, connections());
+        return new UpdateBuilder(sql, connections(), this);
     }
 
     public TransactedBuilder tx(Tx<?> tx) {
         TxImpl<?> t = (TxImpl<?>) tx;
         TransactedConnection c = t.connection().fork();
-        return new TransactedBuilder(c);
+        return new TransactedBuilder(c, this);
     }
 
     public static final Object NULL_CLOB = new Object();

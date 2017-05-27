@@ -7,15 +7,19 @@ import io.reactivex.Flowable;
 public class TransactedBuilder {
 
     private final Flowable<Connection> connections;
-    private SelectBuilder selectBuilder;
+    private final Database db;
 
-    public TransactedBuilder(TransactedConnection con) {
+    public TransactedBuilder(TransactedConnection con, Database db) {
+        this.db = db;
         this.connections = Flowable.just(con);
     }
 
     public TransactedSelectBuilder select(String sql) {
-        this.selectBuilder = new SelectBuilder(sql, connections);
-        return selectBuilder.transacted();
+        return new SelectBuilder(sql, connections, db).transacted();
+    }
+    
+    public TransactedUpdateBuilder update(String sql) {
+        return  new UpdateBuilder(sql, connections, db).transacted();
     }
 
 }

@@ -11,17 +11,20 @@ import io.reactivex.Flowable;
 
 public final class UpdateBuilder {
 
-    private static final int DEFAULT_BATCH_SIZE = 1;
+    static final int DEFAULT_BATCH_SIZE = 1;
 
     final String sql;
     final Flowable<Connection> connections;
+    private final Database db;
     private final ParametersBuilder parameters;
     private List<Flowable<?>> dependsOn;
-    int batchSize = DEFAULT_BATCH_SIZE;
+    private int batchSize = DEFAULT_BATCH_SIZE;
 
-    public UpdateBuilder(String sql, Flowable<Connection> connections) {
+
+    public UpdateBuilder(String sql, Flowable<Connection> connections, Database db) {
         this.sql = sql;
         this.connections = connections;
+        this.db = db;
         this.parameters = new ParametersBuilder(sql);
     }
     
@@ -128,6 +131,10 @@ public final class UpdateBuilder {
     
     Flowable<List<Object>> parameterGroupsToFlowable() {
         return parameters.parameterGroupsToFlowable();
+    }
+
+    public TransactedUpdateBuilder transacted() {
+        return new TransactedUpdateBuilder(this, db);
     }
 
 }
