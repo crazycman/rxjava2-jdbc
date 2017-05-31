@@ -667,7 +667,7 @@ public class DatabaseTest {
                 .batchSize(2)
                 .counts()
                 .test()
-//                .assertValues(1, 1)
+                .assertValues(1, 1)
                 .assertComplete()
                 .assertNoErrors();
 
@@ -686,8 +686,7 @@ public class DatabaseTest {
                 .batchSize(3)
                 .counts()
                 .test()
-                // unfortunately the following does not hold
-//                .assertValues(1, 1)
+                .assertValues(1, 1)
                 .assertComplete()
                 .assertNoErrors();
 
