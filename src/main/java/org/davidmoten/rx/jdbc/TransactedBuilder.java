@@ -4,12 +4,12 @@ import java.sql.Connection;
 
 import io.reactivex.Flowable;
 
-public class TransactedBuilder {
+public final class TransactedBuilder {
 
     private final Flowable<Connection> connections;
     private final Database db;
 
-    public TransactedBuilder(TransactedConnection con, Database db) {
+    TransactedBuilder(TransactedConnection con, Database db) {
         this.db = db;
         this.connections = Flowable.just(con);
     }
@@ -19,7 +19,7 @@ public class TransactedBuilder {
     }
     
     public TransactedUpdateBuilder update(String sql) {
-        return  new UpdateBuilder(sql, connections, db).transacted();
+        return new UpdateBuilder(sql, connections, db).transacted();
     }
 
 }

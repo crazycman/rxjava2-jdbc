@@ -1,19 +1,12 @@
 package org.davidmoten.rx.jdbc;
 
 import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import io.reactivex.Flowable;
-import io.reactivex.Notification;
 
 public final class TransactedSelectBuilder {
-
-    private static final Logger log = LoggerFactory.getLogger(TransactedSelectBuilder.class);
 
     private final SelectBuilder selectBuilder;
 
@@ -21,7 +14,7 @@ public final class TransactedSelectBuilder {
 
     private final Database db;
 
-    public TransactedSelectBuilder(SelectBuilder selectBuilder, Database db) {
+    TransactedSelectBuilder(SelectBuilder selectBuilder, Database db) {
         this.selectBuilder = selectBuilder;
         this.db = db;
     }
@@ -75,39 +68,13 @@ public final class TransactedSelectBuilder {
         }
 
         public <T> Flowable<T> getAs(Class<T> cls) {
-            AtomicReference<Connection> connection = new AtomicReference<Connection>();
-            Flowable<Tx<T>> o = Select
-                    .create(b.selectBuilder.connections.firstOrError() //
-                            .map(c -> Util.toTransactedConnection(connection, c)), //
-                            b.selectBuilder.parameterGroupsToFlowable(), //
-                            b.selectBuilder.sql, //
-                            b.selectBuilder.fetchSize, //
-                            rs -> Util.mapObject(rs, cls, 1)) //
-                    .materialize() //
-                    .flatMap(n -> toTx(n, connection.get(), db)).doOnNext(tx -> {
-                        if (tx.isComplete()) {
-                            ((TxImpl<T>) tx).connection().commit();
-                        }
-                    });
-            return o.flatMap(Tx.flattenToValuesOnly());
+            return createFlowable(b.selectBuilder, cls, db) //
+                    .flatMap(Tx.flattenToValuesOnly());
         }
     }
 
     public <T> Flowable<Tx<T>> getAs(Class<T> cls) {
-        AtomicReference<Connection> connection = new AtomicReference<Connection>();
-        Flowable<Tx<T>> o = Select
-                .create(selectBuilder.connections.firstOrError() //
-                        .map(c -> Util.toTransactedConnection(connection, c)), //
-                        selectBuilder.parameterGroupsToFlowable(), //
-                        selectBuilder.sql, //
-                        selectBuilder.fetchSize, //
-                        rs -> Util.mapObject(rs, cls, 1)) //
-                .materialize() //
-                .flatMap(n -> toTx(n, connection.get(), db)).doOnNext(tx -> {
-                    if (tx.isComplete()) {
-                        ((TxImpl<T>) tx).connection().commit();
-                    }
-                });
+        Flowable<Tx<T>> o = createFlowable(selectBuilder, cls, db);
         if (valuesOnly) {
             return o.filter(tx -> tx.isValue());
         } else {
@@ -115,13 +82,24 @@ public final class TransactedSelectBuilder {
         }
     }
 
-    private static <T> Flowable<Tx<T>> toTx(Notification<T> n, Connection con, Database db) {
-        if (n.isOnComplete())
-            return Flowable.just(new TxImpl<T>(con, null, null, true, db));
-        else if (n.isOnNext())
-            return Flowable.just(new TxImpl<T>(con, n.getValue(), null, false, db));
-        else
-            return Flowable.error(n.getError());
+    private static <T> Flowable<Tx<T>> createFlowable(SelectBuilder sb, Class<T> cls, Database db) {
+        return Flowable.defer(() -> {
+            AtomicReference<Connection> connection = new AtomicReference<Connection>();
+            return Select
+                    .create(sb.connections.firstOrError() //
+                            .map(c -> Util.toTransactedConnection(connection, c)), //
+                            sb.parameterGroupsToFlowable(), //
+                            sb.sql, //
+                            sb.fetchSize, //
+                            rs -> Util.mapObject(rs, cls, 1)) //
+                    .materialize() //
+                    .flatMap(n -> Tx.toTx(n, connection.get(), db)) //
+                    .doOnNext(tx -> {
+                        if (tx.isComplete()) {
+                            ((TxImpl<T>) tx).connection().commit();
+                        }
+                    });
+        });
     }
 
 }

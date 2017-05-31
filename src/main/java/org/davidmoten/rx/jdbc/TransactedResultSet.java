@@ -21,12 +21,12 @@ import java.sql.Timestamp;
 import java.util.Calendar;
 import java.util.Map;
 
-public class TransactedResultSet implements ResultSet {
+public final class TransactedResultSet implements ResultSet {
 
     private final ResultSet rs;
     private final TransactedPreparedStatement ps;
 
-    public TransactedResultSet(TransactedPreparedStatement ps, ResultSet rs) {
+    TransactedResultSet(TransactedPreparedStatement ps, ResultSet rs) {
         this.rs = rs;
         this.ps = ps;
     }

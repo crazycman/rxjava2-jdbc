@@ -1,4 +1,4 @@
-package org.davidmoten.rx;
+package org.davidmoten.rx.jdbc;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -17,9 +17,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.davidmoten.rx.jdbc.Database;
 import org.davidmoten.rx.jdbc.annotations.Column;
 import org.davidmoten.rx.jdbc.annotations.Index;
+import org.davidmoten.rx.jdbc.annotations.Query;
 import org.davidmoten.rx.jdbc.exceptions.AnnotationsNotFoundException;
 import org.davidmoten.rx.jdbc.exceptions.ColumnIndexOutOfRangeException;
 import org.davidmoten.rx.jdbc.exceptions.ColumnNotFoundException;
@@ -49,6 +49,7 @@ import io.reactivex.subscribers.TestSubscriber;
 
 public class DatabaseTest {
 
+    private static final int NAMES_COUNT_BIG = 5163;
     private static final Logger log = LoggerFactory.getLogger(DatabaseTest.class);
 
     private static Database db() {
@@ -57,6 +58,10 @@ public class DatabaseTest {
 
     private static Database db(int poolSize) {
         return DatabaseCreator.create(poolSize);
+    }
+
+    private static Database big(int poolSize) {
+        return DatabaseCreator.create(poolSize, true);
     }
 
     @Test
@@ -459,12 +464,27 @@ public class DatabaseTest {
                 .assertValue(21) //
                 .assertComplete();
     }
+    
+//    @Test
+//    public void testAutoMapWithQueryInAnnotation() {
+//        db() //
+//                .select(Person10.class) //
+//                .autoMap()
+//                .get() //
+//                .firstOrError() //
+//                .map(Person9::score) //
+//                .test() //
+//                .assertValue(21) //
+//                .assertComplete();
+//    }
+
 
     @Test
     public void testSelectWithoutWhereClause() {
-        Assert.assertEquals(3, (long) db().select("select name from person") //
-                .count() //
-                .blockingGet());
+        Assert.assertEquals(3,
+                (long) db().select("select name from person") //
+                        .count() //
+                        .blockingGet());
     }
 
     @Test
@@ -600,6 +620,28 @@ public class DatabaseTest {
     }
 
     @Test
+    public void testUpdateWithBatchSize2() {
+        db().update("update person set score=?") //
+                .batchSize(2) //
+                .parameters(1, 2, 3, 4) //
+                .counts() //
+                .test() //
+                .assertValues(3, 3, 3, 3) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testUpdateWithBatchSize3GreaterThanNumRecords() {
+        db().update("update person set score=?") //
+                .batchSize(3) //
+                .parameters(1, 2, 3, 4) //
+                .counts() //
+                .test() //
+                .assertValues(3, 3, 3, 3) //
+                .assertComplete();
+    }
+
+    @Test
     public void testInsert() {
         Database db = db();
         db.update("insert into person(name, score) values(?,?)") //
@@ -677,6 +719,156 @@ public class DatabaseTest {
     }
 
     @Test
+    public void testReturnGeneratedKeysDerby() {
+        Database db = DatabaseCreator.createDerby(1);
+
+        // note is a table with auto increment
+        db.update("insert into note2(text) values(?)") //
+                .parameters("HI", "THERE") //
+                .returnGeneratedKeys() //
+                .getAs(Integer.class)//
+                .test() //
+                .assertNoErrors().assertValues(1, 3) //
+                .assertComplete();
+
+        db.update("insert into note2(text) values(?)") //
+                .parameters("ME", "TOO") //
+                .returnGeneratedKeys() //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(5, 7) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testTransactedReturnGeneratedKeys() {
+        Database db = db();
+        // note is a table with auto increment
+        db.update("insert into note(text) values(?)") //
+                .parameters("HI", "THERE") //
+                .transacted() //
+                .returnGeneratedKeys() //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(1, 2) //
+                .assertComplete();
+
+        db.update("insert into note(text) values(?)") //
+                .parameters("ME", "TOO") //
+                .transacted() //
+                .returnGeneratedKeys() //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(3, 4) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testTransactedReturnGeneratedKeys2() {
+        Database db = db();
+        // note is a table with auto increment
+        Flowable<Integer> a = db.update("insert into note(text) values(?)") //
+                .parameters("HI", "THERE") //
+                .transacted() //
+                .returnGeneratedKeys() //
+                .getAs(Integer.class);
+
+        db.update("insert into note(text) values(?)") //
+                .parameters("ME", "TOO") //
+                .transacted() //
+                .returnGeneratedKeys() //
+                .getAs(Integer.class)//
+                .startWith(a) //
+                .test() //
+                .assertValues(1, 2, 3, 4) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testUpdateWithinTransaction() {
+        db() //
+                .select("select name from person") //
+                .transactedValuesOnly() //
+                .getAs(String.class) //
+                .doOnNext(System.out::println) //
+                .flatMap(tx -> tx//
+                        .update("update person set score=-1 where name=:name") //
+                        .batchSize(1) //
+                        .parameter("name", tx.value()) //
+                        .valuesOnly() //
+                        .counts()) //
+                .test() //
+                .assertValues(1, 1, 1) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testUpdateWithinTransactionBatchSize0() {
+        db() //
+                .select("select name from person") //
+                .transactedValuesOnly() //
+                .getAs(String.class) //
+                .doOnNext(System.out::println) //
+                .flatMap(tx -> tx//
+                        .update("update person set score=-1 where name=:name") //
+                        .batchSize(0) //
+                        .parameter("name", tx.value()) //
+                        .valuesOnly() //
+                        .counts()) //
+                .test() //
+                .assertValues(1, 1, 1) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testCreateBig() {
+        big(5) //
+                .select("select count(*) from person") //
+                .getAs(Integer.class) //
+                .test() //
+                .assertValue(5163) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testTxWithBig() {
+        big(1) //
+                .select("select name from person") //
+                .transactedValuesOnly() //
+                .getAs(String.class) //
+                .doOnNext(System.out::println) //
+                .flatMap(tx -> tx//
+                        .update("update person set score=-1 where name=:name") //
+                        .batchSize(1) //
+                        .parameter("name", tx.value()) //
+                        .valuesOnly() //
+                        .counts()) //
+                .count() //
+                .test() //
+                .assertValue((long) NAMES_COUNT_BIG) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testTxWithBigInputBatchSize2000() {
+        big(1) //
+                .select("select name from person") //
+                .transactedValuesOnly() //
+                .getAs(String.class) //
+                .doOnNext(System.out::println) //
+                .flatMap(tx -> tx//
+                        .update("update person set score=-1 where name=:name") //
+                        .batchSize(2000) //
+                        .parameter("name", tx.value()) //
+                        .valuesOnly() //
+                        .counts()) //
+                .count() //
+                .test() //
+                .assertValue((long) NAMES_COUNT_BIG) //
+                .assertComplete();
+    }
+
+    @Test
     public void testInsertClobAndReadClobAsString() {
         Database db = db();
         db.update("insert into person_clob(name,document) values(?,?)") //
@@ -707,7 +899,7 @@ public class DatabaseTest {
                 .assertValue("some text here") //
                 .assertComplete();
     }
-    
+
     @Test
     public void testInsertBlobAndReadBlobAsByteArray() {
         Database db = db();
@@ -725,7 +917,7 @@ public class DatabaseTest {
                 .assertValue("some text here") //
                 .assertComplete();
     }
-    
+
     @Test
     public void testInsertBlobAndReadBlobAsInputStream() {
         Database db = db();
@@ -755,7 +947,7 @@ public class DatabaseTest {
         reader.close();
         return s.toString();
     }
-    
+
     private static byte[] read(InputStream is) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         byte[] b = new byte[128];
@@ -891,6 +1083,16 @@ public class DatabaseTest {
 
     interface PersonNoAnnotation {
         String name();
+    }
+    
+    @Query("select name, score from person order by name")
+    interface Person10 {
+        
+        @Column
+        String name();
+        
+        @Column
+        int score();
     }
 
 }

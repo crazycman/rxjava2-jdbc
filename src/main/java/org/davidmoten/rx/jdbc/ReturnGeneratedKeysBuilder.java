@@ -2,7 +2,7 @@ package org.davidmoten.rx.jdbc;
 
 import io.reactivex.Flowable;
 
-public final class ReturnGeneratedKeysBuilder {
+public final class ReturnGeneratedKeysBuilder implements Getter {
 
     private final UpdateBuilder update;
 
@@ -16,13 +16,10 @@ public final class ReturnGeneratedKeysBuilder {
      * @param function
      * @return the results of the query as an Observable
      */
+    @Override
     public <T> Flowable<T> get(ResultSetMapper<? extends T> function) {
-        return Update.<T> createReturnGeneratedKeys(update.connections,
+        return Update.<T>createReturnGeneratedKeys(update.connections.firstOrError(),
                 update.parameterGroupsToFlowable(), update.sql, function);
-    }
-
-    public <T> Flowable<T> getAs(Class<T> cls) {
-        return get(rs -> Util.mapObject(rs, cls, 1));
     }
 
 }

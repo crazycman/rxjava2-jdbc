@@ -2,26 +2,33 @@ package org.davidmoten.rx.jdbc;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.concurrent.Callable;
 
-import org.reactivestreams.Publisher;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import io.reactivex.Completable;
 import io.reactivex.Emitter;
 import io.reactivex.Flowable;
+import io.reactivex.Notification;
 import io.reactivex.Single;
 import io.reactivex.functions.BiConsumer;
 import io.reactivex.functions.Consumer;
 import io.reactivex.functions.Function;
 
-public enum Update {
-    ;
+final class Update {
 
-    public static Flowable<Integer> create(Flowable<Connection> connections,
+    private static final Logger log = LoggerFactory.getLogger(Update.class);
+
+    private Update() {
+        // prevent instantiation
+    }
+
+    public static Flowable<Integer> create(Single<Connection> connection,
             Flowable<List<Object>> parameterGroups, String sql, int batchSize) {
-        return connections //
-                .firstOrError() //
+        return connection //
                 .toFlowable() //
                 .flatMap(con -> create(con, sql, parameterGroups, batchSize), true, 1);
     }
@@ -29,16 +36,17 @@ public enum Update {
     private static Flowable<Integer> create(Connection con, String sql,
             Flowable<List<Object>> parameterGroups, int batchSize) {
         Callable<NamedPreparedStatement> resourceFactory = () -> Util.prepare(con, sql);
-        Function<NamedPreparedStatement, Flowable<Integer>> observableFactory;
+        final Function<NamedPreparedStatement, Flowable<Integer>> flowableFactory;
         if (batchSize == 0) {
-            observableFactory = ps -> parameterGroups
+            flowableFactory = ps -> parameterGroups
                     .flatMap(parameters -> create(ps, parameters).toFlowable()) //
                     .doOnComplete(() -> Util.commit(ps.ps)) //
                     .doOnError(e -> Util.rollback(ps.ps));
         } else {
-            observableFactory = ps -> {
+            flowableFactory = ps -> {
                 int[] count = new int[1];
                 return parameterGroups.flatMap(parameters -> {
+                    incrementCounter(ps.ps.getConnection());
                     count[0] += 1;
                     Flowable<Integer> result;
                     if (count[0] == batchSize) {
@@ -52,15 +60,30 @@ public enum Update {
                             // execute the last batch, result is not in returned Flowable!
                             .doOnComplete(() -> ps.ps.executeBatch())
                             .doOnError(e -> Util.rollback(ps.ps));
-                });
+                }).materialize() //
+                        .flatMap(n -> executeFinalBatch(ps, n, count[0] > 0)) //
+                        .dematerialize();
             };
         }
         Consumer<NamedPreparedStatement> disposer = Util::closePreparedStatementAndConnection;
-        return Flowable.using(resourceFactory, observableFactory, disposer, true);
+        return Flowable.using(resourceFactory, flowableFactory, disposer, true);
+    }
+
+    private static Flowable<Notification<Integer>> executeFinalBatch(NamedPreparedStatement ps,
+            Notification<Integer> n, boolean outstandingBatch) throws SQLException {
+        if (n.isOnComplete() && outstandingBatch) {
+            log.info("executing final batch");
+            return toFlowable(ps.ps.executeBatch()) //
+                    .map(x -> Notification.createOnNext(x)) //
+                    .concatWith(Flowable.just(n));
+        } else {
+            return Flowable.just(n);
+        }
     }
 
     private static Single<Integer> create(NamedPreparedStatement ps, List<Object> parameters) {
         return Single.fromCallable(() -> {
+            incrementCounter(ps.ps.getConnection());
             Util.setParameters(ps.ps, parameters, ps.names);
             return ps.ps.executeUpdate();
         });
@@ -71,11 +94,21 @@ public enum Update {
         return Flowable.defer(() -> {
             Util.setParameters(ps.ps, parameters, ps.names);
             ps.ps.addBatch();
-            return toFlowable(ps.ps.executeBatch());
+            log.debug("batch added with {}",parameters);
+            Flowable<Integer> o = toFlowable(ps.ps.executeBatch());
+            log.debug("batch executed");
+            return o;
         });
     }
 
-    private static Publisher<? extends Integer> toFlowable(int[] a) {
+    private static void incrementCounter(Connection connection) {
+        if (connection instanceof TransactedConnection) {
+            TransactedConnection c = (TransactedConnection) connection;
+            c.incrementCounter();
+        }
+    }
+
+    private static Flowable<Integer> toFlowable(int[] a) {
         return Flowable.range(0, a.length).map(i -> a[i]);
     }
 
@@ -83,14 +116,14 @@ public enum Update {
         return Completable.fromAction(() -> {
             Util.setParameters(ps.ps, parameters, ps.names);
             ps.ps.addBatch();
+            log.debug("batch added with {}",parameters);
         });
     }
 
-    public static <T> Flowable<T> createReturnGeneratedKeys(Flowable<Connection> connections,
+    public static <T> Flowable<T> createReturnGeneratedKeys(Single<Connection> connection,
             Flowable<List<Object>> parameterGroups, String sql,
             Function<? super ResultSet, ? extends T> mapper) {
-        return connections //
-                .firstOrError() //
+        return connection //
                 .toFlowable() //
                 .flatMap(con -> createReturnGeneratedKeys(con, parameterGroups, sql, mapper), true,
                         1);
