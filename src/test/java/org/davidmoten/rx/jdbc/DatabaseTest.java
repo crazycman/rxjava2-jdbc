@@ -17,6 +17,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.apache.log4j.Level;
+import org.apache.log4j.LogManager;
 import org.davidmoten.rx.jdbc.annotations.Column;
 import org.davidmoten.rx.jdbc.annotations.Index;
 import org.davidmoten.rx.jdbc.annotations.Query;
@@ -24,6 +26,7 @@ import org.davidmoten.rx.jdbc.exceptions.AnnotationsNotFoundException;
 import org.davidmoten.rx.jdbc.exceptions.ColumnIndexOutOfRangeException;
 import org.davidmoten.rx.jdbc.exceptions.ColumnNotFoundException;
 import org.davidmoten.rx.jdbc.exceptions.NamedParameterMissingException;
+import org.davidmoten.rx.jdbc.exceptions.QueryAnnotationMissingException;
 import org.davidmoten.rx.jdbc.pool.DatabaseCreator;
 import org.davidmoten.rx.jdbc.pool.NonBlockingConnectionPool;
 import org.davidmoten.rx.jdbc.pool.PoolClosedException;
@@ -121,8 +124,7 @@ public class DatabaseTest {
     @Test
     public void testSelectUsingQuestionMarkFlowableParameterListsTwoParametersPerQuery() {
         db().select("select score from person where name=? and score = ?") //
-                .parameterListStream(
-                        Flowable.just(Arrays.asList("FRED", 21), Arrays.asList("JOSEPH", 34))) //
+                .parameterListStream(Flowable.just(Arrays.asList("FRED", 21), Arrays.asList("JOSEPH", 34))) //
                 .getAs(Integer.class) //
                 .test() //
                 .assertNoErrors() //
@@ -464,20 +466,22 @@ public class DatabaseTest {
                 .assertValue(21) //
                 .assertComplete();
     }
-    
-//    @Test
-//    public void testAutoMapWithQueryInAnnotation() {
-//        db() //
-//                .select(Person10.class) //
-//                .autoMap()
-//                .get() //
-//                .firstOrError() //
-//                .map(Person9::score) //
-//                .test() //
-//                .assertValue(21) //
-//                .assertComplete();
-//    }
 
+    @Test
+    public void testAutoMapWithQueryInAnnotation() {
+        db().select(Person10.class) //
+                .get() //
+                .firstOrError() //
+                .map(Person10::score) //
+                .test() //
+                .assertValue(21) //
+                .assertComplete();
+    }
+
+    @Test(expected = QueryAnnotationMissingException.class)
+    public void testAutoMapWithoutQueryInAnnotation() {
+        db().select(Person.class);
+    }
 
     @Test
     public void testSelectWithoutWhereClause() {
@@ -523,8 +527,7 @@ public class DatabaseTest {
     public void testTuple6() {
         db() //
                 .select("select name, score, name, score, name, score from person order by name") //
-                .getAs(String.class, Integer.class, String.class, Integer.class, String.class,
-                        Integer.class) //
+                .getAs(String.class, Integer.class, String.class, Integer.class, String.class, Integer.class) //
                 .firstOrError() //
                 .test() //
                 .assertComplete().assertValue(Tuple6.create("FRED", 21, "FRED", 21, "FRED", 21)); //
@@ -534,12 +537,11 @@ public class DatabaseTest {
     public void testTuple7() {
         db() //
                 .select("select name, score, name, score, name, score, name from person order by name") //
-                .getAs(String.class, Integer.class, String.class, Integer.class, String.class,
-                        Integer.class, String.class) //
+                .getAs(String.class, Integer.class, String.class, Integer.class, String.class, Integer.class,
+                        String.class) //
                 .firstOrError() //
                 .test() //
-                .assertComplete()
-                .assertValue(Tuple7.create("FRED", 21, "FRED", 21, "FRED", 21, "FRED")); //
+                .assertComplete().assertValue(Tuple7.create("FRED", 21, "FRED", 21, "FRED", 21, "FRED")); //
     }
 
     @Test
@@ -819,23 +821,32 @@ public class DatabaseTest {
                 .assertComplete();
     }
 
+    private static void info() {
+        LogManager.getRootLogger().setLevel(Level.INFO);
+    }
+
+    private static void debug() {
+        LogManager.getRootLogger().setLevel(Level.DEBUG);
+    }
+
     @Test
     public void testCreateBig() {
-        big(5) //
-                .select("select count(*) from person") //
+        info();
+        big(5).select("select count(*) from person") //
                 .getAs(Integer.class) //
                 .test() //
                 .assertValue(5163) //
                 .assertComplete();
+        debug();
     }
 
     @Test
     public void testTxWithBig() {
+        info();
         big(1) //
                 .select("select name from person") //
                 .transactedValuesOnly() //
                 .getAs(String.class) //
-                .doOnNext(System.out::println) //
                 .flatMap(tx -> tx//
                         .update("update person set score=-1 where name=:name") //
                         .batchSize(1) //
@@ -846,15 +857,16 @@ public class DatabaseTest {
                 .test() //
                 .assertValue((long) NAMES_COUNT_BIG) //
                 .assertComplete();
+        debug();
     }
 
     @Test
     public void testTxWithBigInputBatchSize2000() {
+        info();
         big(1) //
                 .select("select name from person") //
                 .transactedValuesOnly() //
                 .getAs(String.class) //
-                .doOnNext(System.out::println) //
                 .flatMap(tx -> tx//
                         .update("update person set score=-1 where name=:name") //
                         .batchSize(2000) //
@@ -865,6 +877,7 @@ public class DatabaseTest {
                 .test() //
                 .assertValue((long) NAMES_COUNT_BIG) //
                 .assertComplete();
+        debug();
     }
 
     @Test
@@ -1083,13 +1096,13 @@ public class DatabaseTest {
     interface PersonNoAnnotation {
         String name();
     }
-    
+
     @Query("select name, score from person order by name")
     interface Person10 {
-        
+
         @Column
         String name();
-        
+
         @Column
         int score();
     }
