@@ -23,9 +23,10 @@ public class DatabaseCreator {
     }
 
     public static Database createDerby(int maxSize) {
-        return Database.from(
-                Pools.nonBlocking().connectionProvider(connectionProviderDerby(nextUrlDerby()))
-                        .maxPoolSize(maxSize).build());
+        return Database.from(Pools.nonBlocking() //
+                .connectionProvider(connectionProviderDerby(nextUrlDerby())) //
+                .maxPoolSize(maxSize) //
+                .build());
     }
 
     private static ConnectionProvider connectionProviderDerby(String url) {
@@ -59,8 +60,7 @@ public class DatabaseCreator {
         c.setAutoCommit(true);
         exec(c, "create table note2("
                 + "id integer not null generated always as identity (start with 1, increment by 2),"
-                + "text varchar(255) not null," + "constraint primary_key primary key (id)"
-                + ")");
+                + "text varchar(255) not null," + "constraint primary_key primary key (id)" + ")");
     }
 
     public static Database create(int maxSize, boolean big) {
@@ -112,7 +112,7 @@ public class DatabaseCreator {
         try {
             c.setAutoCommit(true);
             c.prepareStatement(
-                    "create table person (name varchar(50) primary key, score int not null,dob date, registered timestamp)")
+                    "create table person (name varchar(50) primary key, score int not null, date_of_birth date, registered timestamp)")
                     .execute();
             if (big) {
                 List<String> lines = IOUtils.readLines(
@@ -127,7 +127,7 @@ public class DatabaseCreator {
                     }
                 });
             } else {
-                exec(c, "insert into person(name,score) values('FRED',21)");
+                exec(c, "insert into person(name,score,registered) values('FRED',21, {ts '2015-09-17 18:47:52.69Z'})");
                 exec(c, "insert into person(name,score) values('JOSEPH',34)");
                 exec(c, "insert into person(name,score) values('MARMADUKE',25)");
             }

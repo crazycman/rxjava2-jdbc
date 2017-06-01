@@ -5,7 +5,10 @@ import java.util.List;
 
 import com.github.davidmoten.guavamini.Preconditions;
 
+import io.reactivex.Completable;
 import io.reactivex.Flowable;
+import io.reactivex.Observable;
+import io.reactivex.Single;
 
 public final class SelectBuilder extends ParametersBuilder<SelectBuilder> implements Getter {
 
@@ -14,6 +17,7 @@ public final class SelectBuilder extends ParametersBuilder<SelectBuilder> implem
     private final Database db;
 
     int fetchSize = 0; // default
+    private Flowable<?> dependsOn;
 
     public SelectBuilder(String sql, Flowable<Connection> connections, Database db) {
         super(sql);
@@ -41,7 +45,31 @@ public final class SelectBuilder extends ParametersBuilder<SelectBuilder> implem
     @Override
     public <T> Flowable<T> get(ResultSetMapper<? extends T> function) {
         Flowable<List<Object>> pg = super.parameterGroupsToFlowable();
-        return Select.<T> create(connections.firstOrError(), pg, sql, fetchSize, function);
+        Flowable<T> f = Select.<T> create(connections.firstOrError(), pg, sql, fetchSize, function);
+        if (dependsOn != null) {
+            return dependsOn.ignoreElements().andThen(f);
+        } else {
+            return f;
+        }
+    }
+
+    public Getter dependsOn(Flowable<?> flowable) {
+        Preconditions.checkArgument(dependsOn == null, "can only set dependsOn once");
+        Preconditions.checkNotNull(flowable);
+        dependsOn = flowable;
+        return this;
+    }
+
+    public Getter dependsOn(Observable<?> observable) {
+        return dependsOn(observable.ignoreElements().toFlowable());
+    }
+
+    public Getter dependsOn(Single<?> single) {
+        return dependsOn(single.toFlowable());
+    }
+
+    public Getter dependsOn(Completable completable) {
+        return dependsOn(completable.toFlowable());
     }
 
 }

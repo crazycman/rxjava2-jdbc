@@ -10,7 +10,9 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.sql.Connection;
 import java.sql.SQLSyntaxErrorException;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -25,6 +27,7 @@ import org.davidmoten.rx.jdbc.annotations.Query;
 import org.davidmoten.rx.jdbc.exceptions.AnnotationsNotFoundException;
 import org.davidmoten.rx.jdbc.exceptions.ColumnIndexOutOfRangeException;
 import org.davidmoten.rx.jdbc.exceptions.ColumnNotFoundException;
+import org.davidmoten.rx.jdbc.exceptions.MoreColumnsRequestedThanExistException;
 import org.davidmoten.rx.jdbc.exceptions.NamedParameterMissingException;
 import org.davidmoten.rx.jdbc.exceptions.QueryAnnotationMissingException;
 import org.davidmoten.rx.jdbc.pool.DatabaseCreator;
@@ -44,7 +47,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
+import io.reactivex.Completable;
 import io.reactivex.Flowable;
+import io.reactivex.Observable;
+import io.reactivex.Single;
 import io.reactivex.functions.Predicate;
 import io.reactivex.schedulers.Schedulers;
 import io.reactivex.schedulers.TestScheduler;
@@ -52,6 +58,7 @@ import io.reactivex.subscribers.TestSubscriber;
 
 public class DatabaseTest {
 
+    private static final long FRED_REGISTERED_TIME = 1442515672690L;
     private static final int NAMES_COUNT_BIG = 5163;
     private static final Logger log = LoggerFactory.getLogger(DatabaseTest.class);
 
@@ -124,7 +131,8 @@ public class DatabaseTest {
     @Test
     public void testSelectUsingQuestionMarkFlowableParameterListsTwoParametersPerQuery() {
         db().select("select score from person where name=? and score = ?") //
-                .parameterListStream(Flowable.just(Arrays.asList("FRED", 21), Arrays.asList("JOSEPH", 34))) //
+                .parameterListStream(
+                        Flowable.just(Arrays.asList("FRED", 21), Arrays.asList("JOSEPH", 34))) //
                 .getAs(Integer.class) //
                 .test() //
                 .assertNoErrors() //
@@ -232,7 +240,7 @@ public class DatabaseTest {
                 .parameters("FRED", "JOSEPH") //
                 .transacted() //
                 .getAs(Integer.class) //
-                .doOnNext(System.out::println) //
+                .doOnNext(tx -> System.out.println(tx.isComplete() ? "complete" : tx.value())) //
                 .test() //
                 .assertValueCount(3) //
                 .assertComplete();
@@ -247,7 +255,7 @@ public class DatabaseTest {
                 .transacted() //
                 .transactedValuesOnly() //
                 .getAs(Integer.class) //
-                .doOnNext(System.out::println)//
+                .doOnNext(tx -> System.out.println(tx.isComplete() ? "complete" : tx.value()))//
                 .flatMap(tx -> tx //
                         .select("select name from person where score = ?") //
                         .parameters(tx.value()) //
@@ -527,7 +535,8 @@ public class DatabaseTest {
     public void testTuple6() {
         db() //
                 .select("select name, score, name, score, name, score from person order by name") //
-                .getAs(String.class, Integer.class, String.class, Integer.class, String.class, Integer.class) //
+                .getAs(String.class, Integer.class, String.class, Integer.class, String.class,
+                        Integer.class) //
                 .firstOrError() //
                 .test() //
                 .assertComplete().assertValue(Tuple6.create("FRED", 21, "FRED", 21, "FRED", 21)); //
@@ -537,11 +546,12 @@ public class DatabaseTest {
     public void testTuple7() {
         db() //
                 .select("select name, score, name, score, name, score, name from person order by name") //
-                .getAs(String.class, Integer.class, String.class, Integer.class, String.class, Integer.class,
-                        String.class) //
+                .getAs(String.class, Integer.class, String.class, Integer.class, String.class,
+                        Integer.class, String.class) //
                 .firstOrError() //
                 .test() //
-                .assertComplete().assertValue(Tuple7.create("FRED", 21, "FRED", 21, "FRED", 21, "FRED")); //
+                .assertComplete()
+                .assertValue(Tuple7.create("FRED", 21, "FRED", 21, "FRED", 21, "FRED")); //
     }
 
     @Test
@@ -804,6 +814,66 @@ public class DatabaseTest {
     }
 
     @Test
+    public void testSelectDependsOnFlowable() {
+        Database db = db();
+        Flowable<Integer> a = db.update("update person set score=100 where name=?") //
+                .parameters("FRED") //
+                .counts();
+        db.select("select score from person where name=?") //
+                .parameters("FRED") //
+                .dependsOn(a) //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(100) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testSelectDependsOnObservable() {
+        Database db = db();
+        Observable<Integer> a = db.update("update person set score=100 where name=?") //
+                .parameters("FRED") //
+                .counts().toObservable();
+        db.select("select score from person where name=?") //
+                .parameters("FRED") //
+                .dependsOn(a) //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(100) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testSelectDependsOnOnSingle() {
+        Database db = db();
+        Single<Long> a = db.update("update person set score=100 where name=?") //
+                .parameters("FRED") //
+                .counts().count();
+        db.select("select score from person where name=?") //
+                .parameters("FRED") //
+                .dependsOn(a) //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(100) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testSelectDependsOnCompletable() {
+        Database db = db();
+        Completable a = db.update("update person set score=100 where name=?") //
+                .parameters("FRED") //
+                .counts().ignoreElements();
+        db.select("select score from person where name=?") //
+                .parameters("FRED") //
+                .dependsOn(a) //
+                .getAs(Integer.class)//
+                .test() //
+                .assertValues(100) //
+                .assertComplete();
+    }
+
+    @Test
     public void testUpdateWithinTransactionBatchSize0() {
         db() //
                 .select("select name from person") //
@@ -1025,6 +1095,53 @@ public class DatabaseTest {
                 .test() //
                 .assertNoValues() //
                 .assertError(PoolClosedException.class);
+    }
+
+    @Test
+    public void testFewerColumnsMappedThanAvailable() {
+        db().select("select name, score from person where name='FRED'") //
+                .getAs(String.class) //
+                .test() //
+                .assertValues("FRED") //
+                .assertComplete();
+    }
+
+    @Test
+    public void testMoreColumnsMappedThanAvailable() {
+        db().select("select name, score from person where name='FRED'") //
+                .getAs(String.class, Integer.class, String.class) //
+                .test() //
+                .assertNoValues() //
+                .assertError(MoreColumnsRequestedThanExistException.class);
+    }
+
+    @Test
+    public void testSelectTimestamp() {
+        db().select("select registered from person where name='FRED'") //
+                .getAs(Long.class) //
+                .test() //
+                .assertValue(FRED_REGISTERED_TIME) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testSelectTimestampAsDate() {
+        db().select("select registered from person where name='FRED'") //
+                .getAs(Date.class) //
+                .map(d -> d.getTime()) //
+                .test() //
+                .assertValue(FRED_REGISTERED_TIME) //
+                .assertComplete();
+    }
+
+    @Test
+    public void testSelectTimestampAsInstant() {
+        db().select("select registered from person where name='FRED'") //
+                .getAs(Instant.class) //
+                .map(d -> d.toEpochMilli()) //
+                .test() //
+                .assertValue(FRED_REGISTERED_TIME) //
+                .assertComplete();
     }
 
     interface Person {
