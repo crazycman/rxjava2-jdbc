@@ -912,22 +912,24 @@ public class DatabaseTest {
     }
 
     @Test
-    public final void testUpdateBatchSizeMatches() {
+    public final void testUpdateBatchSizeMatches() throws InterruptedException {
         Database db = db();
         db.update("insert into person(name, score) values(?, ?)")
                 .parameters("MAJOR", 17)
                 .parameters("GHOST", 11)
                 .batchSize(2)
                 .counts()
-                .test()
+                .test().awaitDone(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .assertValues(1, 1)
                 .assertComplete()
                 .assertNoErrors();
 
-        db.select("select name from person")
+        List<String> names = db.select("select name from person")
                 .getAs(String.class)
-                .test()
-                .assertValueCount(5);
+//                .doOnNext(System.out::println)
+                .toList()
+                .blockingGet();
+        Assert.assertEquals(5, names.size());
     }
 
     @Test
@@ -938,15 +940,16 @@ public class DatabaseTest {
                 .parameters("FRANZ", 11)
                 .batchSize(3)
                 .counts()
-                .test()
+                .test().awaitDone(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .assertValues(1, 1)
                 .assertComplete()
                 .assertNoErrors();
 
-        db.select("select name from person")
+        List<String> names = db.select("select name from person")
                 .getAs(String.class)
-                .test()
-                .assertValueCount(5);
+                .toList()
+                .blockingGet();
+        Assert.assertEquals(5, names.size());
     }
 
     @Test
