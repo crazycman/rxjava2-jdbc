@@ -3,13 +3,9 @@
 [![codecov](https://codecov.io/gh/davidmoten/rxjava2-jdbc/branch/master/graph/badge.svg)](https://codecov.io/gh/davidmoten/rxjava2-jdbc)
 <!--[![Maven Central](https://maven-badges.herokuapp.com/maven-central/com.github.davidmoten/rxjava2-jdbc/badge.svg?style=flat)](https://maven-badges.herokuapp.com/maven-central/com.github.davidmoten/rxjava2-jdbc)<br/>-->
 
-With the release of RxJava 2 now is a good time for a rewrite of [rxjava-jdbc](https://github.com/davidmoten/rxjava-jdbc). 
-
-See [wiki](https://github.com/davidmoten/rxjava2-jdbc/wiki)
+JDBC is so much simpler with *rxjava2-jdbc*.
 
 Status: *in development*
-
-JDBC is so much simpler with *rxjava2-jdbc*.
 
 How to build
 -------------
@@ -54,8 +50,17 @@ If you want to have a play with a built-in test database then do this:
 ```java
 Database db = Database.test(maxPoolSize);
 ```
+To use the built-in test database you will need the Apache Derby dependency:
 
-The test database has a couple of tables `Person` and `Address` with three rows in `Person` and two rows in `Address`:
+```xml
+<dependency>
+  <groupId>org.apache.derby</groupId>
+  <artifactId>derby</artifactId>
+  <version>10.13.1.1</version>
+</dependency>
+```
+
+The test database has a few tables (see [script](src/main/resources/database-test.sql)) including `Person` and `Address` with three rows in `Person` and two rows in `Address`:
 
 <img src="src/docs/tables.png?raw=true"/>
 
@@ -63,13 +68,13 @@ Each time you call `Database.test(maxPoolSize)` you will have a fresh new databa
 
 A query example
 ---------------
-Let's use the `Database` instance to perform a select query on the `Person` table and write the names to the console:
+Let's use a `Database` instance to perform a select query on the `Person` table and write the names to the console:
 
 ```java
 Database db = Database.test();
 db.select("select name from person")
   .getAs(String.class)
-  .forEach(System.out::println);
+  .blockingForEach(System.out::println);
 ```
 
 Output is
@@ -79,14 +84,35 @@ JOSEPH
 MARMADUKE
 ```
 
-That example is very brief but for these simple tests it's preferable to use a different subscribe method to `forEach` because if we had for instance asked for a column that did not exist then an exception stack trace would be written to stderr but no exception would be thrown. This example will throw a `SQLRuntimeException` because the column `nam` does not exist:
+Note the use of `blockingForEach`. This is only for demonstration purposes. When a query is executed it is executed asynchronously on a scheduler that you can specify if desired. The default scheduler is:
 
 ```java
-Database db = Database.test();
-db.select("select nam from person")
-  .getAs(String.class)
+Schedulers.from(Executors.newFixedThreadPool(maxPoolSize));
+```
+While you are processing reactively you should avoid blocking calls but domain boundaries sometimes force this to happen (e.g. accumulate the results and return them as xml over the network from a web service call). Bear in mind also that if you are worried about the complexities of debugging RxJava programs then you might wish to make brief limited forays into reactive code. That's completely fine too. What you lose in efficiency you may gain in simplicity.
+
+Asynchrony
+------------
+The query flowables returned by the `Database` all run asynchronously. This is required because of the use of non-blocking connection pools. When a connection is returned to the pool and then checked-out by another query that checkout must occur on a different thread so that stack overflow does not occur. See the [Non-blocking connection pools](README.md#non-blocking-connection-pools) section for more details.
+
+
+Nulls
+---------
+RxJava2 does not support streams of nulls. If you want to represent nulls in your stream then use `java.util.Optional`.
+
+In the special case where a single nullable column is being returned and mapped to a class via `getAs` you should instead use `getAsOptional`:
+
+```java
+Database.test() 
+  .select("select date_of_birth from person where name='FRED'")
+  .getAsOptional(Instant.class)
   .blockingForEach(System.out::println);
 ```
+Output:
+```
+Optional.empty
+```
+Nulls will happily map to Tuples (see the next section) when you have two or more columns.
 
 Tuple support
 -----------------
@@ -166,17 +192,61 @@ If you don't configure things correctly these exceptions may be emitted and incl
 * `ColumnNotFoundException`
 * `ClassCastException`
 
+Automap with annotated query
+-----------------------------
+The automapped interface can be annotated with the select query:
+
+```java
+@Query("select name, score from person order by name")
+interface Person {
+   @Column
+   String name();
+
+   @Column
+   int score();
+}
+```
+
+To use the annotated interface:
+
+```java
+Database
+  .test()
+  .select(Person.class)
+  .get()
+  .map(Person::name)
+  .blockingForEach(System.out::println);
+```
+
+Output:
+
+```
+FRED
+JOSEPH
+MARMADUKE
+```
+
+In fact the `.map` is not required if you use a different overload of `get`:
+
+```java
+Database
+  .test()
+  .select(Person.class)
+  .get(Person::name)
+  .blockingForEach(System.out::println);
+```
+
 Auto mappings
 ------------------
 The automatic mappings below of objects are used in the ```autoMap()``` method and for typed ```getAs()``` calls.
 * ```java.sql.Date```,```java.sql.Time```,```java.sql.Timestamp``` <==> ```java.util.Date```
 * ```java.sql.Date```,```java.sql.Time```,```java.sql.Timestamp```  ==> ```java.lang.Long```
+* ```java.sql.Date```,```java.sql.Time```,```java.sql.Timestamp```  ==> ```java.time.Instant```
+* ```java.sql.Date```,```java.sql.Time```,```java.sql.Timestamp```  ==> ```java.time.ZonedDateTime```
 * ```java.sql.Blob``` <==> ```java.io.InputStream```, ```byte[]```
 * ```java.sql.Clob``` <==> ```java.io.Reader```, ```String```
 * ```java.math.BigInteger``` ==> ```Long```, ```Integer```, ```Decimal```, ```Float```, ```Short```, ```java.math.BigDecimal```
 * ```java.math.BigDecimal``` ==> ```Long```, ```Integer```, ```Decimal```, ```Float```, ```Short```, ```java.math.BigInteger```
-
-Note that automappings do not occur to primitives so use ```Long``` instead of ```long```.
 
 Parameters
 ----------------
@@ -319,10 +389,10 @@ If you want more control over the behaviour of the non-blocking connection pool:
 NonBlockingConnectionPool pool = Pools
     .nonBlocking()
     .url(url)
-     an unused connection will be closed after thirty minutes
+    // an unused connection will be closed after thirty minutes
     .maxIdleTime(30, TimeUnit.MINUTES)
-     connections are checked for healthiness on checkout if the connection 
-     has been idle for at least `idleTimeBeforeHealthCheckMs`
+    // connections are checked for healthiness on checkout if the connection 
+    // has been idle for at least `idleTimeBeforeHealthCheckMs`
     .healthy(c -> c.prepareStatement("select 1").execute())
     .idleTimeBeforeHealthCheckMs(1, TimeUnit.MINUTES)
     .returnToPoolDelayAfterHealthCheckFailure(1, TimeUnit.SECONDS) 
@@ -348,29 +418,29 @@ so you can copy and paste this code to your ide and it will run (in a main metho
  of size 1
 Database db = Database.test(1); 
 
-start a slow query
+// start a slow query
 db.select("select score from person where name=?") 
-  .parameters("FRED") 
+  .parameter("FRED") 
   .getAs(Integer.class) 
-   slow things down by sleeping
+   // slow things down by sleeping
   .doOnNext(x -> Thread.sleep(1000)) 
-   run in background thread
+   // run in background thread
   .subscribeOn(Schedulers.io()) 
   .subscribe();
 
-ensure that query starts
+// ensure that query starts
 Thread.sleep(100);
 
-query again while first query running
+// query again while first query running
 db.select("select score from person where name=?") 
-  .parameters("FRED") 
+  .parameter("FRED") 
   .getAs(Integer.class) 
   .doOnNext(x -> System.out.println("emitted on " + Thread.currentThread().getName())) 
   .subscribe();
 
 System.out.println("second query submitted");
 
-wait for stuff to happen asynchronously
+// wait for stuff to happen asynchronously
 Thread.sleep(5000);
 ```
 
@@ -396,83 +466,96 @@ Blob and Clobs are straightforward to handle.
 Here's how to insert a String value into a Clob (*document* column below is of type ```CLOB```):
 ```java
 String document = ...
-Observable<Integer> count = db
-		.update("insert into person_clob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameter(Database.toSentinelIfNull(document)).count();
+Flowable<Integer> count = db
+  .update("insert into person_clob(name,document) values(?,?)")
+  .parameters("FRED", document)
+  .count();
 ```
-(Note the use of the ```Database.toSentinelIfNull(String)``` method to handle the null case correctly)
-
-or using a ```java.io.Reader```:
+If your document is nullable then you should use `Database.clob(document)`:
+```java
+String document = ...
+Flowable<Integer> count = db
+  .update("insert into person_clob(name,document) values(?,?)")
+  .parameters("FRED", Database.clob(document))
+  .count();
+```
+Using a ```java.io.Reader```:
 ```java
 Reader reader = ...;
-Observable<Integer> count = db
-		.update("insert into person_clob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameter(reader).count();
+Flowable<Integer> count = db
+  .update("insert into person_clob(name,document) values(?,?)")
+  .parameters("FRED", reader)
+  .count();
 ```
 ### Insert a Null Clob
-This requires *either* a special call (```parameterClob(String)```) to identify the parameter as a CLOB:
 ```java
-Observable<Integer> count = db
-		.update("insert into person_clob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameterClob(null).count();
+Flowable<Integer> count = db
+  .update("insert into person_clob(name,document) values(?,?)")
+  .parameters("FRED", Database.NULL_CLOB)
+  .count();
 ```
-or use the null Sentinel object for Clobs:
+or 
 ```java
-Observable<Integer> count = db
-		.update("insert into person_clob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameter(Database.NULL_CLOB).count();
+Flowable<Integer> count = db
+  .update("insert into person_clob(name,document) values(?,?)")
+  .parameters("FRED", Database.clob(null))
+  .count();
 ```
-or wrap the String parameter with ```Database.toSentinelIfNull(String)``` as above in the Insert a Clob section.
 
 ### Read a Clob
 ```java
-Observable<String> document = db.select("select document from person_clob")
-				.getAs(String.class);
+Flowable<String> document = 
+  db.select("select document from person_clob")
+    .getAs(String.class);
 ```
 or
 ```java
-Observable<Reader> document = db.select("select document from person_clob")
-				.getAs(Reader.class);
+Flowable<Reader> document = 
+  db.select("select document from person_clob")
+    .getAs(Reader.class);
 ```
+### Read a null Clob
+For the special case where you want to return one value from a select statement and that value is a nullable CLOB then use `getAsOptional`:
+```java
+db.select("select document from person_clob where name='FRED'")
+  .getAsOptional(String.class)
+```
+
 ### Insert a Blob
 Similarly for Blobs (*document* column below is of type ```BLOB```):
 ```java
 byte[] bytes = ...
-Observable<Integer> count = db
-		.update("insert into person_blob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameter(Database.toSentinelIfNull(bytes)).count();
+Flowable<Integer> count = db
+  .update("insert into person_blob(name,document) values(?,?)")
+  .parameters("FRED", Database.blob(bytes))
+  .count();
 ```
 ### Insert a Null Blob
 This requires *either* a special call (```parameterBlob(String)``` to identify the parameter as a CLOB:
 ```java
-Observable<Integer> count = db
-		.update("insert into person_blob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameterBlob(null).count();
+Flowable<Integer> count = db
+  .update("insert into person_blob(name,document) values(?,?)")
+  .parameters("FRED", Database.NULL_BLOB)
+  .count();
 ```
-or use the null Sentinel object for Blobs:
+or 
 ```java
-Observable<Integer> count = db
-		.update("insert into person_clob(name,document) values(?,?)")
-		.parameter("FRED")
-		.parameter(Database.NULL_BLOB).count();
+Flowable<Integer> count = db
+  .update("insert into person_clob(name,document) values(?,?)")
+  .parameters("FRED", Database.blob(null))
+  .count();
 ```
-or wrap the byte[] parameter with ```Database.toSentinelIfNull(byte[])``` as above in the Insert a Blob section.
-
 ### Read a Blob
 ```java
-Observable<byte[]> document = db.select("select document from person_clob")
-				.getAs(byte[].class);
+Flowable<byte[]> document = 
+  db.select("select document from person_clob")
+    .getAs(byte[].class);
 ```
 or
 ```java
-Observable<InputStream> document = db.select("select document from person_clob")
-				.getAs(InputStream.class);
+Flowable<InputStream> document = 
+  db.select("select document from person_clob")
+    .getAs(InputStream.class);
 ```
 
 Returning generated keys
@@ -493,8 +576,7 @@ Flowable<Integer> keys =
     db.update("insert into note(text) values(?)")
       .parameters("hello", "there")
       .returnGeneratedKeys()
-      .getAs(Integer.class)
-      .blockingSubscribe();
+      .getAs(Integer.class);
 ```
 
 The `returnGeneratedKeys` method also supports returning multiple keys per row so the builder offers methods just like `select` to do explicit mapping or auto mapping.

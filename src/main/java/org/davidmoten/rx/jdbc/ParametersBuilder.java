@@ -5,13 +5,16 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import javax.annotation.Nonnull;
+
 import com.github.davidmoten.guavamini.Preconditions;
 
 import io.reactivex.Flowable;
 
 class ParametersBuilder<T> {
 
-    private static final Flowable<List<Object>> SINGLE_EMPTY_LIST = Flowable.just(Collections.emptyList());
+    private static final Flowable<List<Object>> SINGLE_EMPTY_LIST = Flowable
+            .just(Collections.emptyList());
 
     private final List<Flowable<List<Object>>> parameterGroups = new ArrayList<>();
     // for building up a number of parameters
@@ -23,32 +26,34 @@ class ParametersBuilder<T> {
     }
 
     @SuppressWarnings("unchecked")
-    public final T parameterStream(Flowable<?> values) {
+    public final T parameterStream(@Nonnull Flowable<?> values) {
         Preconditions.checkNotNull(values);
         if (sqlInfo.numParameters() == 0) {
             parameterListStream(values.map(x -> Collections.emptyList()));
         } else {
-            parameterListStream((Flowable<List<?>>) (Flowable<?>) values.buffer(sqlInfo.numParameters()));
+            parameterListStream(
+                    (Flowable<List<?>>) (Flowable<?>) values.buffer(sqlInfo.numParameters()));
         }
         return (T) this;
     }
 
     @SuppressWarnings("unchecked")
-    public final T parameterListStream(Flowable<List<?>> valueLists) {
-        Preconditions.checkNotNull(valueLists);
+    public final T parameterListStream(@Nonnull Flowable<List<?>> valueLists) {
+        Preconditions.checkNotNull(valueLists, "valueLists cannot be null");
         useAndCloseParameterBuffer();
         parameterGroups.add((Flowable<List<Object>>) (Flowable<?>) valueLists);
         return (T) this;
     }
 
     @SuppressWarnings("unchecked")
-    public final T parameterList(List<Object> values) {
+    public final T parameterList(@Nonnull List<Object> values) {
         parameterListStream(Flowable.just(values));
         return (T) this;
     }
 
     @SuppressWarnings("unchecked")
-    public final T parameterList(Object... values) {
+    public final T parameterList(@Nonnull Object... values) {
+        Preconditions.checkNotNull(values, "values cannot be null");
         parameterStream(Flowable.fromArray(values) //
                 .buffer(sqlInfo.numParameters()));
         return (T) this;
@@ -56,9 +61,13 @@ class ParametersBuilder<T> {
 
     @SuppressWarnings("unchecked")
     public final T parameter(String name, Object value) {
-        Preconditions.checkNotNull(name);
+        Preconditions.checkNotNull(name, "name cannot be null");
         parameterBuffer.add(new Parameter(name, value));
         return (T) this;
+    }
+
+    public final T parameter(Object value) {
+        return parameters(value);
     }
 
     @SuppressWarnings("unchecked")
@@ -68,10 +77,12 @@ class ParametersBuilder<T> {
             // no effect
             return (T) this;
         }
-        Preconditions.checkArgument(sqlInfo.numParameters() == 0 || values.length % sqlInfo.numParameters() == 0,
-                "number of values should be a multiple of number of parameters in sql: " + sqlInfo.sql());
-        Preconditions.checkArgument(Arrays.stream(values)
-                .allMatch(o -> sqlInfo.names().isEmpty() || (o instanceof Parameter && ((Parameter) o).hasName())));
+        Preconditions.checkArgument(
+                sqlInfo.numParameters() == 0 || values.length % sqlInfo.numParameters() == 0,
+                "number of values should be a multiple of number of parameters in sql: "
+                        + sqlInfo.sql());
+        Preconditions.checkArgument(Arrays.stream(values).allMatch(o -> sqlInfo.names().isEmpty()
+                || (o instanceof Parameter && ((Parameter) o).hasName())));
         for (Object val : values) {
             parameterBuffer.add(val);
         }
@@ -87,37 +98,6 @@ class ParametersBuilder<T> {
             pg = Flowable.concat(parameterGroups);
         }
         return pg;
-    }
-
-    /**
-     * Appends a parameter to the parameter list for the query for a CLOB
-     * parameter and handles null appropriately. If there are more parameters
-     * than required for one execution of the query then more than one execution
-     * of the query will occur.
-     * 
-     * @param value
-     *            the string to insert in the CLOB column
-     * @return this
-     */
-    @SuppressWarnings("unchecked")
-    public final T parameterClob(String value) {
-        parameters(Database.toSentinelIfNull(value));
-        return (T) this;
-    }
-
-    /**
-     * Appends a parameter to the parameter list for the query for a CLOB
-     * parameter and handles null appropriately. If there are more parameters
-     * than required for one execution of the query then more than one execution
-     * of the query will occur.
-     * 
-     * @param value
-     * @return this
-     */
-    @SuppressWarnings("unchecked")
-    public final T parameterBlob(byte[] bytes) {
-        parameters(Database.toSentinelIfNull(bytes));
-        return (T) this;
     }
 
     private void useAndCloseParameterBuffer() {

@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import io.reactivex.Flowable;
 
-public final class TransactedSelectBuilder {
+public final class TransactedSelectBuilder implements DependsOn<TransactedSelectBuilder> {
 
     private final SelectBuilder selectBuilder;
 
@@ -45,12 +45,22 @@ public final class TransactedSelectBuilder {
     }
 
     public TransactedSelectBuilder parameter(Object value) {
-        selectBuilder.parameters(value);
+        return parameters(value);
+    }
+
+    public TransactedSelectBuilder fetchSize(int size) {
+        selectBuilder.fetchSize(size);
         return this;
     }
 
     public TransactedSelectBuilder transactedValuesOnly() {
         this.valuesOnly = true;
+        return this;
+    }
+
+    @Override
+    public TransactedSelectBuilder dependsOn(Flowable<?> flowable) {
+        selectBuilder.dependsOn(flowable);
         return this;
     }
 
@@ -88,17 +98,18 @@ public final class TransactedSelectBuilder {
             return Select
                     .create(sb.connections.firstOrError() //
                             .map(c -> Util.toTransactedConnection(connection, c)), //
-                            sb.parameterGroupsToFlowable(), //
-                            sb.sql, //
-                            sb.fetchSize, //
-                            rs -> Util.mapObject(rs, cls, 1)) //
+                    sb.parameterGroupsToFlowable(), //
+                    sb.sql, //
+                    sb.fetchSize, //
+                    rs -> Util.mapObject(rs, cls, 1), //
+                    false) //
                     .materialize() //
                     .flatMap(n -> Tx.toTx(n, connection.get(), db)) //
                     .doOnNext(tx -> {
-                        if (tx.isComplete()) {
-                            ((TxImpl<T>) tx).connection().commit();
-                        }
-                    });
+                if (tx.isComplete()) {
+                    ((TxImpl<T>) tx).connection().commit();
+                }
+            });
         });
     }
 

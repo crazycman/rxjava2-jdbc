@@ -5,9 +5,15 @@ import java.sql.ResultSet;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
-import io.reactivex.Flowable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-public final class TransactedUpdateBuilder {
+import io.reactivex.Flowable;
+import io.reactivex.Single;
+
+public final class TransactedUpdateBuilder implements DependsOn<TransactedUpdateBuilder> {
+
+    private static final Logger log = LoggerFactory.getLogger(TransactedUpdateBuilder.class);
 
     final UpdateBuilder updateBuilder;
     private final Database db;
@@ -43,49 +49,16 @@ public final class TransactedUpdateBuilder {
         return this;
     }
 
+    public TransactedUpdateBuilder parameter(Object value) {
+        return parameters(value);
+    }
+
     public TransactedUpdateBuilder parameters(Object... values) {
         updateBuilder.parameters(values);
         return this;
     }
 
-    /**
-     * Appends a parameter to the parameter list for the query for a CLOB
-     * parameter and handles null appropriately. If there are more parameters
-     * than required for one execution of the query then more than one execution
-     * of the query will occur.
-     * 
-     * @param value
-     *            the string to insert in the CLOB column
-     * @return this
-     */
-    public TransactedUpdateBuilder parameterClob(String value) {
-        updateBuilder.parameterClob(value);
-        return this;
-    }
-
-    /**
-     * Appends a parameter to the parameter list for the query for a CLOB
-     * parameter and handles null appropriately. If there are more parameters
-     * than required for one execution of the query then more than one execution
-     * of the query will occur.
-     * 
-     * @param value
-     * @return this
-     */
-    public TransactedUpdateBuilder parameterBlob(byte[] bytes) {
-        updateBuilder.parameterBlob(bytes);
-        return this;
-    }
-
-    /**
-     * Appends a dependency to the dependencies that have to complete their
-     * emitting before the query is executed.
-     * 
-     * @param dependency
-     *            dependency that must complete before the Flowable built by
-     *            this subscribes.
-     * @return this this
-     */
+    @Override
     public TransactedUpdateBuilder dependsOn(Flowable<?> dependency) {
         updateBuilder.dependsOn(dependency);
         return this;
@@ -105,8 +78,8 @@ public final class TransactedUpdateBuilder {
      * @return a builder used to specify how to process the generated keys
      *         ResultSet
      */
-    public ReturnGeneratedKeysBuilder returnGeneratedKeys() {
-        return updateBuilder.returnGeneratedKeys();
+    public TransactedReturnGeneratedKeysBuilder returnGeneratedKeys() {
+        return new TransactedReturnGeneratedKeysBuilder(this, db);
     }
 
     public TransactedUpdateBuilder transactedValuesOnly() {
@@ -127,6 +100,10 @@ public final class TransactedUpdateBuilder {
             this.db = db;
         }
 
+        // TODO add other methods e.g. parameter setting methods? Lots of
+        // copy-and-paste not attractive here so may accept restricting
+        // functionality once valuesOnly() called
+
         public Flowable<Integer> counts() {
             return createFlowable(b.updateBuilder, db) //
                     .flatMap(Tx.flattenToValuesOnly());
@@ -142,21 +119,37 @@ public final class TransactedUpdateBuilder {
         }
     }
 
+    public Flowable<Integer> countsOnly() {
+        return valuesOnly().counts();
+    }
+
+    @SuppressWarnings("unchecked")
+    public Single<Tx<?>> tx() {
+        return (Single<Tx<?>>) (Single<?>) createFlowable(updateBuilder, db) //
+                .lastOrError();
+    }
+
     private static Flowable<Tx<Integer>> createFlowable(UpdateBuilder ub, Database db) {
         return Flowable.defer(() -> {
+            log.debug("creating deferred flowable");
             AtomicReference<Connection> connection = new AtomicReference<Connection>();
-            return Update
-                    .create(ub.connections //
-                            .firstOrError() //
-                            .map(c -> Util.toTransactedConnection(connection, c)), //
-                            ub.parameterGroupsToFlowable(), ub.sql, ub.batchSize)
-                    .materialize() //
-                    .flatMap(n -> Tx.toTx(n, connection.get(), db)) //
-                    .doOnNext(tx -> {
-                        if (tx.isComplete()) {
-                            ((TxImpl<Integer>) tx).connection().commit();
-                        }
-                    });
+            AtomicReference<Tx<Integer>> t = new AtomicReference<>();
+            return ub.startWithDependency( //
+                    Update.create(
+                            ub.connections //
+                                    .firstOrError() //
+                                    .map(c -> Util.toTransactedConnection(connection, c)), //
+                            ub.parameterGroupsToFlowable(), //
+                            ub.sql, //
+                            ub.batchSize, //
+                            false) //
+                            .flatMap(n -> Tx.toTx(n, connection.get(), db)) //
+                            .doOnNext(tx -> {
+                                if (tx.isComplete()) {
+                                    t.set(tx);
+                                }
+                            }) //
+            );
         });
     }
 

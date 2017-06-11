@@ -6,6 +6,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -14,36 +15,43 @@ import org.davidmoten.rx.jdbc.ConnectionProvider;
 import org.davidmoten.rx.jdbc.Database;
 import org.davidmoten.rx.jdbc.exceptions.SQLRuntimeException;
 
+import io.reactivex.Scheduler;
+import io.reactivex.schedulers.Schedulers;
+
 public class DatabaseCreator {
 
     private static AtomicInteger dbNumber = new AtomicInteger();
 
     public static Database create(int maxSize) {
-        return create(maxSize, false);
+        return create(maxSize, false, Schedulers.from(Executors.newFixedThreadPool(maxSize)));
+    }
+
+    public static Database create(int maxSize, Scheduler scheduler) {
+        return create(maxSize, false, scheduler);
     }
 
     public static Database createDerby(int maxSize) {
         return Database.from(Pools.nonBlocking() //
                 .connectionProvider(connectionProviderDerby(nextUrlDerby())) //
                 .maxPoolSize(maxSize) //
+                .scheduler(Schedulers.from(Executors.newFixedThreadPool(maxSize))) //
                 .build());
     }
 
     private static ConnectionProvider connectionProviderDerby(String url) {
+        Connection c;
+        try {
+            c = DriverManager.getConnection(url);
+            createDatabaseDerby(c);
+        } catch (SQLException e) {
+            throw new SQLRuntimeException(e);
+        }
         return new ConnectionProvider() {
-
-            private final AtomicBoolean once = new AtomicBoolean(false);
 
             @Override
             public Connection get() {
                 try {
-                    Connection c = DriverManager.getConnection(url);
-                    synchronized (this) {
-                        if (once.compareAndSet(false, true)) {
-                            createDatabaseDerby(c);
-                        }
-                    }
-                    return c;
+                    return DriverManager.getConnection(url);
                 } catch (SQLException e) {
                     throw new SQLRuntimeException(e);
                 }
@@ -63,10 +71,11 @@ public class DatabaseCreator {
                 + "text varchar(255) not null," + "constraint primary_key primary key (id)" + ")");
     }
 
-    public static Database create(int maxSize, boolean big) {
-        return Database
-                .from(Pools.nonBlocking().connectionProvider(connectionProvider(nextUrl(), big))
-                        .maxPoolSize(maxSize).build());
+    public static Database create(int maxSize, boolean big, Scheduler scheduler) {
+        return Database.from(Pools.nonBlocking() //
+                .connectionProvider(connectionProvider(nextUrl(), big)).maxPoolSize(maxSize) //
+                .scheduler(scheduler) //
+                .build());
     }
 
     public static ConnectionProvider connectionProvider() {
@@ -100,7 +109,7 @@ public class DatabaseCreator {
         };
     }
 
-    private static String nextUrl() {
+    public static String nextUrl() {
         return "jdbc:h2:mem:test" + dbNumber.incrementAndGet() + ";DB_CLOSE_DELAY=-1";
     }
 
@@ -115,13 +124,12 @@ public class DatabaseCreator {
                     "create table person (name varchar(50) primary key, score int not null, date_of_birth date, registered timestamp)")
                     .execute();
             if (big) {
-                List<String> lines = IOUtils.readLines(
-                        DatabaseCreator.class.getResourceAsStream("/big.txt"),
+                List<String> lines = IOUtils.readLines(DatabaseCreator.class.getResourceAsStream("/big.txt"),
                         StandardCharsets.UTF_8);
                 lines.stream().map(line -> line.split("\t")).forEach(items -> {
                     try {
-                        c.prepareStatement("insert into person(name,score) values('" + items[0]
-                                + "'," + Integer.parseInt(items[1]) + ")").execute();
+                        c.prepareStatement("insert into person(name,score) values('" + items[0] + "',"
+                                + Integer.parseInt(items[1]) + ")").execute();
                     } catch (SQLException e) {
                         throw new SQLRuntimeException(e);
                     }
