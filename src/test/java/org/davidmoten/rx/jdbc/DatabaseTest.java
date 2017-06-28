@@ -912,6 +912,40 @@ public class DatabaseTest {
     }
 
     @Test
+    public void testInsertWithParameterStream() {
+        Database db = db();
+        db.update("insert into person(name, score) values(?,?)")
+                .parameterStream(Flowable.just("DAVE", 12, "ANNE", 18))
+                .counts()
+                .test().awaitDone(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .assertValues(1, 1)
+                .assertComplete();
+        List<Tuple2<String, Integer>> list = db.select("select name, score from person")
+                .getAs(String.class, Integer.class)
+                .toList()
+                .blockingGet();
+        assertTrue(list.contains(Tuple2.create("DAVE", 12)));
+        assertTrue(list.contains(Tuple2.create("ANNE", 18)));
+    }
+
+    @Test
+    public void testInsertWithParameterListStream() {
+        Database db = db();
+        db.update("insert into person(name, score) values(?,?)")
+                .parameterListStream(Flowable.just(Arrays.asList("DAVE", 12), Arrays.asList("ANNE", 18)))
+                .counts()
+                .test().awaitDone(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .assertValues(1, 1)
+                .assertComplete();
+        List<Tuple2<String, Integer>> list = db.select("select name, score from person")
+                .getAs(String.class, Integer.class)
+                .toList()
+                .blockingGet();
+        assertTrue(list.contains(Tuple2.create("DAVE", 12)));
+        assertTrue(list.contains(Tuple2.create("ANNE", 18)));
+    }
+
+    @Test
     public final void testUpdateBatchSizeMatches() throws InterruptedException {
         Database db = db();
         db.update("insert into person(name, score) values(?, ?)")
