@@ -946,6 +946,25 @@ public class DatabaseTest {
     }
 
     @Test
+    public void testInsertWithNamedParameterListStream() {
+        Database db = db();
+        db.update("insert into person(name, score) values(:name,:score)")
+                .parameterListStream(Flowable.just(
+                        Arrays.asList(Parameter.create("name", "DAVE"), Parameter.create("score", 12)),
+                        Arrays.asList(Parameter.create("name", "ANNE"), Parameter.create("score", 18))))
+                .counts()
+                .test().awaitDone(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .assertValues(1, 1)
+                .assertComplete();
+        List<Tuple2<String, Integer>> list = db.select("select name, score from person")
+                .getAs(String.class, Integer.class)
+                .toList()
+                .blockingGet();
+        assertTrue(list.contains(Tuple2.create("DAVE", 12)));
+        assertTrue(list.contains(Tuple2.create("ANNE", 18)));
+    }
+
+    @Test
     public final void testUpdateBatchSizeMatches() throws InterruptedException {
         Database db = db();
         db.update("insert into person(name, score) values(?, ?)")

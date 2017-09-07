@@ -75,7 +75,7 @@ public final class Parameter {
 
     @Override
     public String toString() {
-        StringBuilder builder = new StringBuilder();
+        StringBuilder builder = new StringBuilder(name + "=");
         if (value instanceof String)
             builder.append("'");
         builder.append(value);
